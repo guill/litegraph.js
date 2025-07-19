@@ -113,7 +113,7 @@ export class RopePhysics {
     this.anchorEnd = [end[0], end[1]]
   }
 
-  step(deltaTime: number = 1): void {
+  step(deltaTime: number = 1, nodeRectangles?: Array<{ x: number, y: number, width: number, height: number }>): void {
     if (this.particles.length === 0) return
 
     const first = this.particles[0]
@@ -159,6 +159,13 @@ export class RopePhysics {
           p1.y -= offsetY
           p2.x += offsetX
           p2.y += offsetY
+        }
+      }
+
+      // Apply collisions during constraint solving
+      if (nodeRectangles) {
+        for (const rect of nodeRectangles) {
+          this.applyRectangleCollision(rect.x, rect.y, rect.width, rect.height)
         }
       }
 
@@ -216,6 +223,63 @@ export class RopePhysics {
 
     return nearestIndex
   }
+
+  // Apply collision with a rectangle (node boundary)
+  applyRectangleCollision(x: number, y: number, width: number, height: number): void {
+    const margin = 3 // Small margin to prevent visual overlap
+    const nodeTop = y - margin
+    const nodeBottom = y + height + margin
+    const nodeLeft = x - margin
+    const nodeRight = x + width + margin
+
+    for (let i = 1; i < this.particles.length - 1; i++) {
+      const particle = this.particles[i]
+
+      // Check if particle is inside the rectangle
+      if (particle.x >= nodeLeft && particle.x <= nodeRight &&
+        particle.y >= nodeTop && particle.y <= nodeBottom) {
+        // Calculate distances to all edges
+        const distTop = particle.y - nodeTop
+        const distBottom = nodeBottom - particle.y
+        const distLeft = particle.x - nodeLeft
+        const distRight = nodeRight - particle.x
+
+        // Find minimum distance to push particle out
+        const minDist = Math.min(distTop, distBottom, distLeft, distRight)
+
+        // Push particle to the nearest edge
+        if (minDist === distTop) {
+          // Push to top (most common case for ropes)
+          particle.y = nodeTop
+          // Kill downward velocity completely
+          if (particle.oldY > particle.y) {
+            particle.oldY = particle.y
+          }
+          // Apply friction to horizontal movement
+          const velX = particle.x - particle.oldX
+          particle.oldX = particle.x - velX * 0.95
+        } else if (minDist === distBottom) {
+          // Push to bottom
+          particle.y = nodeBottom
+          if (particle.oldY < particle.y) {
+            particle.oldY = particle.y
+          }
+        } else if (minDist === distLeft) {
+          // Push to left
+          particle.x = nodeLeft
+          if (particle.oldX > particle.x) {
+            particle.oldX = particle.x
+          }
+        } else {
+          // Push to right
+          particle.x = nodeRight
+          if (particle.oldX < particle.x) {
+            particle.oldX = particle.x
+          }
+        }
+      }
+    }
+  }
 }
 
 // Rope manager for handling multiple ropes
@@ -252,11 +316,12 @@ export class RopePhysicsManager {
     this.ropes.delete(id)
   }
 
-  step(deltaTime: number = 1): void {
+  step(deltaTime: number = 1, nodeRectangles?: Array<{ x: number, y: number, width: number, height: number }>): void {
     if (!this.enabled) return
 
+    // Pass node rectangles to each rope's step method
     for (const rope of this.ropes.values()) {
-      rope.step(deltaTime)
+      rope.step(deltaTime, nodeRectangles)
     }
   }
 

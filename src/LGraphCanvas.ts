@@ -682,12 +682,12 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
 
     // Initialize rope physics
     this.ropePhysics = new RopePhysicsManager({
-      segments: 15,
-      gravity: 0.5,
-      damping: 0.98,
-      stiffness: 0.9,
-      iterations: 5,
-      mass: 1.0,
+      segments: 20,
+      gravity: 0.3,
+      damping: 0.995,
+      stiffness: 0.95,
+      iterations: 8,
+      mass: 0.8,
     })
 
     this.linkConnector.events.addEventListener("link-created", () => this.#dirty())
@@ -4095,7 +4095,26 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
     if (this.ropePhysics.isEnabled() && this.render_time > 0) {
       // Limit physics delta time to prevent instability
       const deltaTime = Math.min(this.render_time * 60, 2) // Convert to ~60fps units, cap at 2
-      this.ropePhysics.step(deltaTime)
+
+      // Collect visible node boundaries for collision detection
+      let nodeRectangles: Array<{ x: number, y: number, width: number, height: number }> | undefined
+      if (this.links_render_mode === LinkRenderType.PHYSICS_LINK && this.visible_nodes) {
+        nodeRectangles = []
+        for (const node of this.visible_nodes) {
+          if (node.pos && node.size) {
+            nodeRectangles.push({
+              x: node.pos[0] - 5,
+              y: node.pos[1] - LiteGraph.NODE_TITLE_HEIGHT,
+              width: node.size[0] + 5,
+              height: node.size[1] + LiteGraph.NODE_TITLE_HEIGHT,
+            })
+          }
+        }
+        // Sort by Y position to process top nodes first
+        nodeRectangles.sort((a, b) => a.y - b.y)
+      }
+
+      this.ropePhysics.step(deltaTime, nodeRectangles)
 
       // Force continuous rendering when physics is active
       if (this.links_render_mode === LinkRenderType.PHYSICS_LINK) {
