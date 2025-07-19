@@ -123,11 +123,12 @@ export class LiteGraphGlobal {
   CENTER = LinkDirection.CENTER
 
   /** helper */
-  LINK_RENDER_MODES = ["Straight", "Linear", "Spline"]
+  LINK_RENDER_MODES = ["Straight", "Linear", "Spline", "Physics"]
   HIDDEN_LINK = LinkRenderType.HIDDEN_LINK
   STRAIGHT_LINK = LinkRenderType.STRAIGHT_LINK
   LINEAR_LINK = LinkRenderType.LINEAR_LINK
   SPLINE_LINK = LinkRenderType.SPLINE_LINK
+  PHYSICS_LINK = LinkRenderType.PHYSICS_LINK
 
   NORMAL_TITLE = TitleMode.NORMAL_TITLE
   NO_TITLE = TitleMode.NO_TITLE

@@ -61,6 +61,8 @@ export enum LinkRenderType {
   LINEAR_LINK = 1,
   /** Smooth curved links - default */
   SPLINE_LINK = 2,
+  /** Physics-based rope simulation */
+  PHYSICS_LINK = 3,
 }
 
 /** The marker in the middle of a link */

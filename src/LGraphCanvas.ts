@@ -61,6 +61,7 @@ import {
   snapPoint,
 } from "./measure"
 import { NodeInputSlot } from "./node/NodeInputSlot"
+import { RopePhysicsManager } from "./physics/RopePhysics"
 import { Reroute, type RerouteId } from "./Reroute"
 import { stringOrEmpty } from "./strings"
 import { Subgraph } from "./subgraph/Subgraph"
@@ -559,6 +560,8 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
   dirty_bgcanvas: boolean = true
   /** A map of nodes that require selective-redraw */
   dirty_nodes = new Map<NodeId, LGraphNode>()
+  /** Rope physics manager for link animations */
+  ropePhysics: RopePhysicsManager
   dirty_area?: Rect | null
   /** @deprecated Unused */
   node_in_panel?: LGraphNode | null
@@ -676,6 +679,16 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
 
     this.ds = new DragAndScale(canvas)
     this.pointer = new CanvasPointer(canvas)
+
+    // Initialize rope physics
+    this.ropePhysics = new RopePhysicsManager({
+      segments: 15,
+      gravity: 0.5,
+      damping: 0.98,
+      stiffness: 0.9,
+      iterations: 5,
+      mass: 1.0,
+    })
 
     this.linkConnector.events.addEventListener("link-created", () => this.#dirty())
 
@@ -1602,6 +1615,9 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
     this.node_capturing_input = null
     this.connecting_links = null
     this.highlighted_links = {}
+
+    // Clear rope physics
+    this.ropePhysics.clear()
 
     this.dragging_canvas = false
 
@@ -4075,6 +4091,18 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
     this.render_time = (now - this.last_draw_time) * 0.001
     this.last_draw_time = now
 
+    // Step rope physics simulation
+    if (this.ropePhysics.isEnabled() && this.render_time > 0) {
+      // Limit physics delta time to prevent instability
+      const deltaTime = Math.min(this.render_time * 60, 2) // Convert to ~60fps units, cap at 2
+      this.ropePhysics.step(deltaTime)
+
+      // Force continuous rendering when physics is active
+      if (this.links_render_mode === LinkRenderType.PHYSICS_LINK) {
+        this.dirty_bgcanvas = true
+      }
+    }
+
     if (this.graph) this.ds.computeVisibleArea(this.viewport)
 
     // Compute node size before drawing links.
@@ -4951,6 +4979,21 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
     const { graph, subgraph } = this
     if (!graph) throw new NullGraphError()
 
+    // Clean up physics ropes for removed links
+    if (this.links_render_mode === LinkRenderType.PHYSICS_LINK && this.ropePhysics.isEnabled()) {
+      const validLinkIds = new Set<string>()
+      for (const link of graph._links.values()) {
+        validLinkIds.add(link.id.toString())
+      }
+
+      // Remove ropes that no longer have corresponding links
+      for (const ropeId of this.ropePhysics.getRopeIds()) {
+        if (!validLinkIds.has(ropeId)) {
+          this.ropePhysics.removeRope(ropeId)
+        }
+      }
+    }
+
     const visibleReroutes: Reroute[] = []
 
     const now = LiteGraph.getTime()
@@ -5325,41 +5368,64 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
       innerB[0] = b[0]
       innerB[1] = b[1]
 
-      if (this.links_render_mode == LinkRenderType.SPLINE_LINK) {
-        if (endControl) {
-          innerB[0] = b[0] + endControl[0]
-          innerB[1] = b[1] + endControl[1]
+      if (this.links_render_mode == LinkRenderType.PHYSICS_LINK && link && this.ropePhysics.isEnabled()) {
+        // Physics-based rope rendering
+        const linkId = link.id.toString()
+        const rope = this.ropePhysics.getRope(linkId)
+
+        if (rope) {
+          // Update anchor points
+          rope.updateAnchors(a, b)
         } else {
-          this.#addSplineOffset(innerB, endDir, dist)
+          // Create new rope
+          this.ropePhysics.createRope(linkId, a, b)
         }
-        if (startControl) {
-          innerA[0] = a[0] + startControl[0]
-          innerA[1] = a[1] + startControl[1]
-        } else {
-          this.#addSplineOffset(innerA, startDir, dist)
-        }
-        path.moveTo(a[0], a[1] + offsety)
-        path.bezierCurveTo(
-          innerA[0],
-          innerA[1] + offsety,
-          innerB[0],
-          innerB[1] + offsety,
-          b[0],
-          b[1] + offsety,
-        )
 
-        // Calculate centre point
-        findPointOnCurve(pos, a, b, innerA, innerB, 0.5)
+        const ropePoints = this.ropePhysics.getRope(linkId)?.getPoints()
 
-        if (linkSegment && this.linkMarkerShape === LinkMarkerShape.Arrow) {
-          const justPastCentre = LGraphCanvas.#lTempC
-          findPointOnCurve(justPastCentre, a, b, innerA, innerB, 0.51)
+        if (ropePoints && ropePoints.length > 2) {
+          // Draw smooth curve through physics points
+          path.moveTo(ropePoints[0][0], ropePoints[0][1] + offsety)
 
-          linkSegment._centreAngle = Math.atan2(
-            justPastCentre[1] - pos[1],
-            justPastCentre[0] - pos[0],
+          // Use quadratic curves for smoother rope
+          for (let j = 1; j < ropePoints.length - 1; j++) {
+            const xc = (ropePoints[j][0] + ropePoints[j + 1][0]) / 2
+            const yc = (ropePoints[j][1] + ropePoints[j + 1][1]) / 2
+            path.quadraticCurveTo(
+              ropePoints[j][0],
+              ropePoints[j][1] + offsety,
+              xc,
+              yc + offsety,
+            )
+          }
+
+          // Last segment
+          const lastIdx = ropePoints.length - 1
+          path.quadraticCurveTo(
+            ropePoints[lastIdx][0],
+            ropePoints[lastIdx][1] + offsety,
+            b[0],
+            b[1] + offsety,
           )
+
+          // Calculate centre point from physics
+          const midIdx = Math.floor(ropePoints.length / 2)
+          pos[0] = ropePoints[midIdx][0]
+          pos[1] = ropePoints[midIdx][1]
+
+          // Calculate angle for arrow
+          if (linkSegment && this.linkMarkerShape === LinkMarkerShape.Arrow && midIdx > 0) {
+            linkSegment._centreAngle = Math.atan2(
+              ropePoints[midIdx + 1][1] - ropePoints[midIdx - 1][1],
+              ropePoints[midIdx + 1][0] - ropePoints[midIdx - 1][0],
+            )
+          }
+        } else {
+          // Fallback to spline if no physics points
+          this.#drawSplinePath(path, a, b, innerA, innerB, startControl, endControl, startDir, endDir, dist, offsety, pos, linkSegment)
         }
+      } else if (this.links_render_mode == LinkRenderType.SPLINE_LINK) {
+        this.#drawSplinePath(path, a, b, innerA, innerB, startControl, endControl, startDir, endDir, dist, offsety, pos, linkSegment)
       } else {
         const l = this.links_render_mode == LinkRenderType.LINEAR_LINK ? 15 : 10
         switch (startDir) {
@@ -5612,6 +5678,57 @@ export class LGraphCanvas implements CustomEventDispatcher<LGraphCanvasEventMap>
     case LinkDirection.DOWN:
       point[1] += dist * factor
       break
+    }
+  }
+
+  #drawSplinePath(
+    path: Path2D,
+    a: ReadOnlyPoint,
+    b: ReadOnlyPoint,
+    innerA: Point,
+    innerB: Point,
+    startControl: ReadOnlyPoint | undefined,
+    endControl: ReadOnlyPoint | undefined,
+    startDir: LinkDirection,
+    endDir: LinkDirection,
+    dist: number,
+    offsety: number,
+    pos: Point,
+    linkSegment: LinkSegment | null | undefined,
+  ): void {
+    if (endControl) {
+      innerB[0] = b[0] + endControl[0]
+      innerB[1] = b[1] + endControl[1]
+    } else {
+      this.#addSplineOffset(innerB, endDir, dist)
+    }
+    if (startControl) {
+      innerA[0] = a[0] + startControl[0]
+      innerA[1] = a[1] + startControl[1]
+    } else {
+      this.#addSplineOffset(innerA, startDir, dist)
+    }
+    path.moveTo(a[0], a[1] + offsety)
+    path.bezierCurveTo(
+      innerA[0],
+      innerA[1] + offsety,
+      innerB[0],
+      innerB[1] + offsety,
+      b[0],
+      b[1] + offsety,
+    )
+
+    // Calculate centre point
+    findPointOnCurve(pos, a, b, innerA, innerB, 0.5)
+
+    if (linkSegment && this.linkMarkerShape === LinkMarkerShape.Arrow) {
+      const justPastCentre = LGraphCanvas.#lTempC
+      findPointOnCurve(justPastCentre, a, b, innerA, innerB, 0.51)
+
+      linkSegment._centreAngle = Math.atan2(
+        justPastCentre[1] - pos[1],
+        justPastCentre[0] - pos[0],
+      )
     }
   }
 
