@@ -23,6 +23,7 @@ export interface RopePhysicsOptions {
   stiffness?: number
   iterations?: number
   mass?: number
+  collisionEnabled?: boolean
 }
 
 export class RopePhysics {
@@ -287,9 +288,11 @@ export class RopePhysicsManager {
   private ropes: Map<string, RopePhysics> = new Map()
   private enabled = true
   private globalOptions: RopePhysicsOptions
+  private collisionEnabled: boolean
 
   constructor(options: RopePhysicsOptions = {}) {
     this.globalOptions = options
+    this.collisionEnabled = options.collisionEnabled ?? true
   }
 
   createRope(id: string, start: ReadOnlyPoint, end: ReadOnlyPoint): RopePhysics {
@@ -319,9 +322,10 @@ export class RopePhysicsManager {
   step(deltaTime: number = 1, nodeRectangles?: Array<{ x: number, y: number, width: number, height: number }>): void {
     if (!this.enabled) return
 
-    // Pass node rectangles to each rope's step method
+    // Pass node rectangles to each rope's step method only if collision is enabled
+    const rectangles = this.collisionEnabled ? nodeRectangles : undefined
     for (const rope of this.ropes.values()) {
-      rope.step(deltaTime, nodeRectangles)
+      rope.step(deltaTime, rectangles)
     }
   }
 
@@ -350,5 +354,13 @@ export class RopePhysicsManager {
 
   getRopeIds(): string[] {
     return Array.from(this.ropes.keys())
+  }
+
+  setCollisionEnabled(enabled: boolean): void {
+    this.collisionEnabled = enabled
+  }
+
+  isCollisionEnabled(): boolean {
+    return this.collisionEnabled
   }
 }
